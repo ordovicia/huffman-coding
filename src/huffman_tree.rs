@@ -1,12 +1,12 @@
 extern crate std;
 
-use std::collections::BinaryHeap;
-use std::cmp;
+use std::collections::{BinaryHeap, HashMap};
+use std::{cmp, fmt};
 
 use super::bit_vec::BitVec;
-use super::huffman_table::HuffmanTable;
+use super::Error;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum HuffmanTree {
     Leaf { count: usize, value: u8 },
     Node {
@@ -14,6 +14,11 @@ pub enum HuffmanTree {
         child_0: Box<HuffmanTree>,
         child_1: Box<HuffmanTree>,
     },
+}
+
+#[derive(Debug, Default)]
+pub struct HuffmanTable {
+    table: HashMap<u8, BitVec>,
 }
 
 impl PartialOrd for HuffmanTree {
@@ -42,7 +47,7 @@ impl HuffmanTree {
         table
     }
 
-    fn to_table_rec(&self, table: &mut HuffmanTable, prefix: BitVec) {
+    fn to_table_rec(&self, table: &mut HuffmanTable, mut prefix: BitVec) {
         match self {
             &HuffmanTree::Leaf { count: _, value: v } => {
                 table.insert(v, prefix);
@@ -52,8 +57,11 @@ impl HuffmanTree {
                 child_0: ref ch0,
                 child_1: ref ch1,
             } => {
-                ch0.to_table_rec(table, prefix.clone_push(false));
-                ch1.to_table_rec(table, prefix.clone_push(true));
+                let mut prefix_clone = prefix.clone();
+                prefix_clone.push(false);
+                ch0.to_table_rec(table, prefix_clone);
+                prefix.push(true);
+                ch1.to_table_rec(table, prefix);
             }
         }
     }
@@ -123,5 +131,36 @@ impl HuffmanTree {
             &HuffmanTree::Leaf { count: c, .. } => c,
             &HuffmanTree::Node { count: c, .. } => c,
         }
+    }
+}
+
+impl fmt::Display for HuffmanTable {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        for (b, e) in &self.table {
+            write!(f, "{}: {}, ", *b, *e).unwrap();
+        }
+        Ok(())
+    }
+}
+
+impl HuffmanTable {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let tree = HuffmanTree::from_bytes(bytes);
+        HuffmanTable::from_tree(&tree)
+    }
+
+    pub fn from_tree(tree: &HuffmanTree) -> Self {
+        tree.to_table()
+    }
+
+    pub fn get(&self, byte: u8) -> Result<BitVec, Error> {
+        match self.table.get(&byte) {
+            Some(code) => Ok(code.clone()),
+            None => Err(Error::InvalidData),
+        }
+    }
+
+    fn insert(&mut self, byte: u8, code: BitVec) {
+        self.table.insert(byte, code);
     }
 }
