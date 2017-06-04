@@ -43,7 +43,7 @@ impl HuffmanTree {
 
     pub fn to_table(&self) -> HuffmanTable {
         let mut table = HuffmanTable::default();
-        self.to_table_rec(&mut table, BitVec::new());
+        self.to_table_rec(&mut table, BitVec::default());
         table
     }
 

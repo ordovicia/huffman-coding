@@ -5,7 +5,7 @@ use super::bit_vec::BitVec;
 use super::Error;
 
 pub fn encode(table: &HuffmanTable, bytes: &[u8]) -> Result<BitVec, Error> {
-    let mut encoded = BitVec::new();
+    let mut encoded = BitVec::default();
     for b in bytes {
         let mut code = table.get(*b)?;
         encoded.append(&mut code);

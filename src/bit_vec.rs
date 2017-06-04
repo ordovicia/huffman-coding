@@ -1,121 +1,306 @@
+//! This module provides `BitVec` struct, vector of bit.
+
 extern crate std;
 
 use std::fmt;
 
-#[derive(Debug, Clone)]
-pub struct BitVec {
-    bytes: Vec<u8>,
-    bits: Vec<bool>,
-}
+const BYTE_LEN: usize = 8;
+const BYTE4_LEN: usize = 32;
+type Byte = u8;
+type Byte4 = u32;
 
-pub struct BitVecIterator<'a> {
-    bitvec: &'a BitVec,
-    byte_idx: usize,
-    bit_idx: usize,
+/// Bit vector.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BitVec {
+    four_bytes: Vec<Byte4>, // 4-byte boundary alignment
+    rem_bits: Byte4,
+    bits_len: usize,
 }
 
 impl fmt::Display for BitVec {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        for byte in &self.bytes {
-            for i in 0..8 {
-                write!(f, "{}", (byte >> (7 - i)) & 1u8).unwrap();
+        for fb in &self.four_bytes {
+            for i in 0..BYTE4_LEN {
+                write!(f, "{}", (fb >> (BYTE4_LEN - 1 - i)) & 1).unwrap();
             }
         }
-        for bit in &self.bits {
-            write!(f, "{}", if *bit { 1 } else { 0 }).unwrap();
+        for i in 0..self.bits_len {
+            write!(f, "{}", (self.rem_bits >> (BYTE4_LEN - 1 - i)) & 1).unwrap();
         }
         Ok(())
     }
 }
 
 impl BitVec {
-    pub fn new() -> Self {
-        BitVec {
-            bytes: Vec::new(),
-            bits: Vec::with_capacity(8),
-        }
-    }
-
-    pub fn append(&mut self, other: &mut Self) {
-        self.bits.append(&mut BitVec::bytes_to_bits(&other.bytes));
-        self.bits.append(&mut other.bits);
-        let (mut new_bytes, new_bits) = BitVec::bits_to_bytes(&self.bits);
-        self.bytes.append(&mut new_bytes);
-        self.bits = new_bits;
-    }
-
-    pub fn push(&mut self, bit: bool) {
-        assert!(self.bits.len() < 8);
-        match self.bits.len() {
-            7 => {
-                self.bits.push(bit);
-                let new_byte = BitVec::bits8_to_bytes(&self.bits);
-                self.bytes.push(new_byte);
-                self.bits.clear();
-            }
-            l if l < 8 => {
-                self.bits.push(bit);
-            }
-            _ => {
-                unreachable!();
-            }
-        }
-    }
-
-    pub fn clone_push(&self, bit: bool) -> Self {
-        let mut cloned = self.clone();
-
-        match cloned.bits.len() {
-            7 => {
-                cloned.bits.push(bit);
-                let new_byte = BitVec::bits8_to_bytes(&cloned.bits);
-                cloned.bytes.push(new_byte);
-                cloned.bits.clear();
-            }
-            l if l < 8 => {
-                cloned.bits.push(bit);
-            }
-            _ => {
-                unreachable!();
-            }
-        }
-
-        cloned
-    }
-
-    fn bytes_to_bits(bytes: &Vec<u8>) -> Vec<bool> {
-        let mut bits = Vec::with_capacity(bytes.len() * 8);
-        for byte in bytes {
-            for i in 0..8 {
-                bits.push(((byte >> (7 - i)) & 1u8) == 1u8);
-            }
-        }
-        bits
-    }
-
-    fn bits_to_bytes(bits: &Vec<bool>) -> (Vec<u8>, Vec<bool>) {
-        let mut byte = 0u8;
-        let mut bytes = vec![];
+    /// Construct `BitVec` from bits (vector of bool).
+    ///
+    /// # Examples
+    /// ```
+    /// extern crate huffman_coding;
+    /// let bitvec = huffman_coding::bit_vec::BitVec::from_bits(&vec![true, false]);
+    /// ```
+    pub fn from_bits(bits: &[bool]) -> Self {
+        let len = bits.len();
+        let mut four_bytes = Vec::with_capacity(len / BYTE4_LEN);
         let mut i = 0;
-        while bits.len() - i >= 8 {
-            for j in 0..8 {
-                byte += (bits[i + j] as u8) << (7 - j);
+        while len - i >= BYTE4_LEN {
+            let mut four_byte = 0;
+            for j in 0..BYTE4_LEN {
+                four_byte += (bits[i + j] as Byte4) << (BYTE4_LEN - 1 - j);
             }
-            i += 8;
-            bytes.push(byte);
-            byte = 0;
+            i += BYTE4_LEN;
+            four_bytes.push(four_byte);
         }
-        (bytes, bits[i..].to_vec())
+        let rem_bits = BitVec::bits_to_byte4(&bits[i..]);
+
+        BitVec {
+            four_bytes,
+            rem_bits,
+            bits_len: len - i,
+        }
     }
 
-    fn bits8_to_bytes(bits: &Vec<bool>) -> u8 {
-        assert!(bits.len() == 8);
-        let mut byte = 0u8;
-        for i in 0..8 {
-            byte += (bits[i] as u8) << (7 - i);
+    /// Construct `BitVec` from bytes (vector of u8).
+    ///
+    /// # Examples
+    /// ```
+    /// extern crate huffman_coding;
+    /// let bitvec = huffman_coding::bit_vec::BitVec::from_bytes(&vec![0u8, 255]);
+    /// ```
+    pub fn from_bytes(bytes: &[Byte]) -> Self {
+        let len = bytes.len();
+        let mut four_bytes = Vec::with_capacity(len / BYTE_LEN);
+        let mut i = 0;
+        while len - i >= 4 {
+            let mut four_byte = 0;
+            for j in 0..4 {
+                four_byte += (bytes[i + j] as Byte4) << (BYTE_LEN * (4 - 1 - j));
+            }
+            i += 4;
+            four_bytes.push(four_byte);
         }
-        byte
+        let rem_bits = BitVec::bytes_to_byte4(&bytes[i..]);
+
+        BitVec {
+            four_bytes,
+            rem_bits,
+            bits_len: BYTE_LEN * (len - i),
+        }
     }
+
+    /// Appnd another `BitVec` to the back of self.
+    /// `other` is left empty.
+    ///
+    /// # Examples
+    /// ```
+    /// extern crate huffman_coding;
+    ///
+    /// fn main() {
+    ///     use huffman_coding::bit_vec::BitVec;
+    ///
+    ///     let mut bitvec = BitVec::from_bits(&vec![true, false]); // 0b10
+    ///     bitvec.append(&mut BitVec::from_bits(&vec![false, true])); // 0b1001
+    ///     assert!(bitvec == BitVec::from_bits(&vec![true, false, false, true]));
+    ///
+    ///     bitvec.append(&mut BitVec::from_bits(&vec![true; 32])); // 0b100111..11
+    ///     let mut vec = vec![true, false, false, true];
+    ///     vec.append(&mut vec![true; 32]);
+    ///     assert!(bitvec == BitVec::from_bits(&vec));
+    /// }
+    /// ```
+    pub fn append(&mut self, other: &mut Self) {
+        let mut bit_vec = BitVec::bits_to_vec(self.rem_bits, self.bits_len);
+        bit_vec.append(&mut BitVec::four_bytes_to_vec(&other.four_bytes));
+        bit_vec.append(&mut BitVec::bits_to_vec(other.rem_bits, other.bits_len));
+        let BitVec {
+            mut four_bytes,
+            rem_bits,
+            bits_len,
+        } = BitVec::from_bits(&bit_vec);
+
+        self.four_bytes.append(&mut four_bytes);
+        self.rem_bits = rem_bits;
+        self.bits_len = bits_len;
+
+        other.rem_bits = 0;
+        other.bits_len = 0;
+    }
+
+    /// Append a bit to the back of self.
+    ///
+    /// # Examples
+    /// ```
+    /// extern crate huffman_coding;
+    ///
+    /// fn main() {
+    ///     use huffman_coding::bit_vec::BitVec;
+    ///
+    ///     let mut bitvec = BitVec::from_bits(&vec![true, false]); // 0b10
+    ///     bitvec.push(true);
+    ///     assert!(bitvec == BitVec::from_bits(&vec![true, false, true])); // 0b101
+    ///
+    ///     bitvec.push(false);
+    ///     assert!(bitvec == BitVec::from_bits(&vec![true, false, true, false])); // 0b1010
+    /// }
+    /// ```
+    pub fn push(&mut self, bit: bool) {
+        if self.bits_len == BYTE4_LEN - 1 {
+            self.four_bytes.push(self.rem_bits | (bit as Byte4));
+            self.rem_bits = 0;
+            self.bits_len = 0;
+        } else {
+            assert!(self.bits_len < BYTE4_LEN - 1);
+            self.rem_bits |= (bit as Byte4) << (BYTE4_LEN - 1 - self.bits_len);
+            self.bits_len += 1;
+        }
+    }
+
+    /// Returns the number of bits.
+    ///
+    /// # Examples
+    /// ```
+    /// extern crate huffman_coding;
+    ///
+    /// fn main() {
+    ///     use huffman_coding::bit_vec::BitVec;
+    ///
+    ///     let mut bitvec = BitVec::from_bits(&vec![true, false]); // 0b10
+    ///     assert!(bitvec.len() == 2);
+    ///
+    ///     bitvec.append(&mut BitVec::from_bits(&vec![true, false, true, false])); // 0b101010
+    ///     assert!(bitvec.len() == 6);
+    ///
+    ///     let vec = vec![true; 32];
+    ///     bitvec.append(&mut BitVec::from_bits(&vec)); // 0b10101011..11
+    ///     assert!(bitvec.len() == 38);
+    /// }
+    /// ```
+    pub fn len(&self) -> usize {
+        BYTE4_LEN * self.four_bytes.len() + self.bits_len
+    }
+
+    /// Align to the 4-byte boundary by padding 0.
+    ///
+    /// # Examples
+    /// ```
+    /// extern crate huffman_coding;
+    ///
+    /// fn main() {
+    ///     use huffman_coding::bit_vec::BitVec;
+    ///
+    ///     let mut vec = vec![true; 32];
+    ///     let mut bitvec = BitVec::from_bits(&vec);
+    ///     bitvec.align();
+    ///     assert!(bitvec == BitVec::from_bits(&vec));
+    ///
+    ///     let mut vec2 = vec![true, false];
+    ///     bitvec.append(&mut BitVec::from_bits(&vec2));
+    ///     bitvec.align();
+    ///     vec2.append(&mut vec![false; 30]);
+    ///     vec.append(&mut vec2);
+    ///     assert!(bitvec == BitVec::from_bits(&vec));
+    /// }
+    /// ```
+    pub fn align(&mut self) {
+        if self.bits_len > 0 {
+            self.four_bytes.push(self.rem_bits);
+            self.rem_bits = 0;
+            self.bits_len = 0;
+        }
+    }
+
+    /// Returns aligned copy.
+    ///
+    /// # Examples
+    /// ```
+    /// extern crate huffman_coding;
+    ///
+    /// fn main() {
+    ///     use huffman_coding::bit_vec::BitVec;
+    ///
+    ///     let mut bitvec = BitVec::from_bits(&vec![true; 32]);
+    ///     assert!(bitvec.aligned_four_bytes() == vec![std::u32::MAX]);
+    ///
+    ///     bitvec.append(&mut BitVec::from_bits(&vec![true, false]));
+    ///     assert!(bitvec.aligned_four_bytes() == vec![std::u32::MAX, 1u32 << 31]);
+    /// }
+    /// ```
+    pub fn aligned_four_bytes(&self) -> Vec<Byte4> {
+        let mut four_bytes = self.four_bytes.clone();
+        if self.bits_len > 0 {
+            four_bytes.push(self.rem_bits);
+        }
+        four_bytes
+    }
+
+    fn bits_to_vec(bits: Byte4, len: usize) -> Vec<bool> {
+        let mut vec = vec![false; len];
+        for i in 0..len {
+            vec[i] = (bits >> (BYTE4_LEN - 1 - i)) & 1 == 1;
+        }
+        vec
+    }
+
+    fn four_bytes_to_vec(four_bytes: &[Byte4]) -> Vec<bool> {
+        let len = BYTE4_LEN * four_bytes.len();
+        let mut vec = vec![false; len];
+        for i in 0..len {
+            vec[i] = (four_bytes[i / BYTE4_LEN] >> (BYTE4_LEN - 1 - i)) & 1 == 1;
+        }
+        vec
+    }
+
+    fn bits_to_byte4(bits: &[bool]) -> Byte4 {
+        assert!(bits.len() < BYTE4_LEN);
+        let mut bits_byte4 = 0;
+        for i in 0..bits.len() {
+            bits_byte4 += (bits[i] as Byte4) << (BYTE4_LEN - 1 - i);
+        }
+        bits_byte4
+    }
+
+    fn bytes_to_byte4(bytes: &[Byte]) -> Byte4 {
+        assert!(bytes.len() < 4);
+        let mut bits_byte4 = 0;
+        for i in 0..bytes.len() {
+            bits_byte4 += (bytes[i] as Byte4) << (4 - 1 - i);
+        }
+        bits_byte4
+    }
+}
+
+/// Iterate all bits in `BitVec`.
+///
+/// # Examples
+/// ```
+/// extern crate huffman_coding;
+///
+/// fn main() {
+///     use huffman_coding::bit_vec::BitVec;
+///
+///     let bitvec = BitVec::from_bits(&vec![true, false]); // 0b10
+///     let mut iter = bitvec.into_iter();
+///     assert!(iter.next() == Some(true));
+///     assert!(iter.next() == Some(false));
+///     assert!(iter.next() == None);
+///
+///     let mut vec = vec![true; 20];
+///     vec.append(&mut vec![false; 20]); // 0b11..1100..00
+///     let bitvec = BitVec::from_bits(&vec);
+///     let mut iter = bitvec.into_iter();
+///     for _ in 0..20 {
+///         assert!(iter.next() == Some(true));
+///     }
+///     for _ in 0..20 {
+///         assert!(iter.next() == Some(false));
+///     }
+///     assert!(iter.next() == None);
+/// }
+/// ```
+pub struct BitVecIterator<'a> {
+    bitvec: &'a BitVec,
+    four_bytes_idx: usize,
+    bits_idx: usize,
 }
 
 impl<'a> IntoIterator for &'a BitVec {
@@ -125,8 +310,8 @@ impl<'a> IntoIterator for &'a BitVec {
     fn into_iter(self) -> Self::IntoIter {
         BitVecIterator {
             bitvec: self,
-            byte_idx: 0,
-            bit_idx: 0,
+            four_bytes_idx: 0,
+            bits_idx: 0,
         }
     }
 }
@@ -135,151 +320,29 @@ impl<'a> Iterator for BitVecIterator<'a> {
     type Item = bool;
 
     fn next(&mut self) -> Option<bool> {
-        if self.bit_idx == 8 {
-            self.bit_idx = 0;
-            self.byte_idx += 1;
+        if self.bits_idx == BYTE4_LEN {
+            self.four_bytes_idx += 1;
+            self.bits_idx = 0;
         }
 
-        if self.byte_idx >= self.bitvec.bytes.len() && self.bit_idx >= self.bitvec.bits.len() {
+        // println!("{}/{} {}/{}",
+        //          self.four_bytes_idx,
+        //          self.bitvec.four_bytes.len(),
+        //          self.bits_idx,
+        //          self.bitvec.bits_len);
+
+        if self.four_bytes_idx >= self.bitvec.four_bytes.len() &&
+           self.bits_idx >= self.bitvec.bits_len {
             None
         } else {
-            let ret = if self.byte_idx == self.bitvec.bytes.len() {
-                self.bitvec.bits[self.bit_idx]
-            } else {
-                (self.bitvec.bytes[self.byte_idx] >> (7 - self.bit_idx)) & 1u8 == 1u8
-            };
+            let ret = ((if self.four_bytes_idx == self.bitvec.four_bytes.len() {
+                            self.bitvec.rem_bits
+                        } else {
+                            self.bitvec.four_bytes[self.four_bytes_idx]
+                        }) >> (BYTE4_LEN - 1 - self.bits_idx)) & 1 == 1;
 
-            self.bit_idx += 1;
+            self.bits_idx += 1;
             Some(ret)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::BitVec;
-
-    #[test]
-    fn append_test() {
-        let mut bitvec = BitVec {
-            bytes: vec![0, 255],
-            bits: vec![],
-        };
-        bitvec.append(&mut BitVec {
-                               bytes: vec![255, 0],
-                               bits: vec![],
-                           });
-        assert!(bitvec.bytes == vec![0, 255, 255, 0]);
-        assert!(bitvec.bits == vec![]);
-
-        bitvec = BitVec {
-            bytes: vec![],
-            bits: vec![true, false, true, false],
-        };
-        bitvec.append(&mut BitVec {
-                               bytes: vec![],
-                               bits: vec![false, true, false, true],
-                           });
-        assert!(bitvec.bytes == vec![165]);
-        assert!(bitvec.bits == vec![]);
-
-        bitvec = BitVec {
-            bytes: vec![255],
-            bits: vec![true, false, true, false],
-        };
-        bitvec.append(&mut BitVec {
-                               bytes: vec![16], // 0001'0000
-                               bits: vec![false, true, false, true, false],
-                           });
-        assert!(bitvec.bytes == vec![255, 161, 5]); // 255, 1010'0001, 0000'0101
-        assert!(bitvec.bits == vec![false]);
-    }
-
-    #[test]
-    fn push_test() {
-        let mut bitvec = BitVec {
-            bytes: vec![],
-            bits: vec![],
-        };
-
-        bitvec.push(true);
-        assert!(bitvec.bits == vec![true]);
-        bitvec.push(true);
-        assert!(bitvec.bits == vec![true, true]);
-        bitvec.push(false);
-        bitvec.push(false);
-        assert!(bitvec.bits == vec![true, true, false, false]);
-        bitvec.push(true);
-        bitvec.push(false);
-        bitvec.push(false);
-        bitvec.push(true); // 1100'1001
-        assert!(bitvec.bytes == vec![201]);
-        assert!(bitvec.bits == vec![]);
-        bitvec.push(true);
-        assert!(bitvec.bytes == vec![201]);
-        assert!(bitvec.bits == vec![true]);
-    }
-
-    #[test]
-    fn bits8_to_bytes_test() {
-        let mut bits = vec![false; 8];
-        assert!(BitVec::bits8_to_bytes(&bits) == 0u8);
-        bits[0] = true; // 1000'0000
-        assert!(BitVec::bits8_to_bytes(&bits) == 128u8);
-        bits[1] = true; // 1100'0000
-        assert!(BitVec::bits8_to_bytes(&bits) == 192u8);
-        bits[2] = true; // 1110'0000
-        assert!(BitVec::bits8_to_bytes(&bits) == 224u8);
-        bits[1] = false; // 1010'0000
-        assert!(BitVec::bits8_to_bytes(&bits) == 160u8);
-        bits[5] = true; // 1010'0100
-        assert!(BitVec::bits8_to_bytes(&bits) == 164u8);
-        bits[7] = true; // 1010'0101
-        assert!(BitVec::bits8_to_bytes(&bits) == 165u8);
-    }
-
-    #[test]
-    fn bits_to_bytes_test() {
-        use super::BitVec;
-
-        let bits = vec![true];
-        assert!(BitVec::bits_to_bytes(&bits) == (vec![], vec![true]));
-
-        let mut bits = vec![true, false, true, false];
-        bits.append(&mut vec![true, false, true, false]);
-        // 1010'1010
-        assert!(BitVec::bits_to_bytes(&bits) == (vec![170u8], vec![]));
-
-        bits.append(&mut vec![true, false]);
-        // 1010'1010 + 10
-        assert!(BitVec::bits_to_bytes(&bits) == (vec![170u8], vec![true, false]));
-        bits.append(&mut vec![true, false, true, true, false, false]);
-        // 1010'1010'1010'1100
-        assert!(BitVec::bits_to_bytes(&bits) == (vec![170u8, 172u8], vec![]));
-
-        bits.append(&mut vec![true, false]);
-        // 1010'1010'1010'1100 + 10
-        assert!(BitVec::bits_to_bytes(&bits) == (vec![170u8, 172u8], vec![true, false]));
-    }
-
-    #[test]
-    fn iterator_test() {
-        let bitvec = BitVec {
-            bytes: vec![170], /* 10101010 */
-            bits: vec![true, false],
-        };
-
-        let mut iter = bitvec.into_iter();
-        assert!(iter.next() == Some(true));
-        assert!(iter.next() == Some(false));
-        assert!(iter.next() == Some(true));
-        assert!(iter.next() == Some(false));
-        assert!(iter.next() == Some(true));
-        assert!(iter.next() == Some(false));
-        assert!(iter.next() == Some(true));
-        assert!(iter.next() == Some(false));
-        assert!(iter.next() == Some(true));
-        assert!(iter.next() == Some(false));
-        assert!(iter.next() == None);
     }
 }
